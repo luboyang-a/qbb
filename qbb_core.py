@@ -27,8 +27,9 @@ class QBB_v1:
         return bases, alphas, errors
     
     def upd(self, W, bases, alphas, steps=3):
-        alphas_param = torch.nn.Parameter(torch.stack(alphas))
-        bases_tensor = torch.stack([b.to(torch.float32) for b in bases])
+        device = W.device
+        alphas_param = torch.nn.Parameter(torch.stack(alphas).to(device))
+        bases_tensor = torch.stack([b.to(torch.float32) for b in bases]).to(device)
         optimizer = torch.optim.Adam([alphas_param], lr=self.lr)
         criterion = torch.nn.MSELoss()
         Wf = W.to(torch.float32)
