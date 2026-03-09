@@ -14,13 +14,14 @@ class QBBLinear(nn.Module):
     @classmethod
     def from_linear(cls, linear_layer, k=4):
         device = linear_layer.weight.device
+        curr_dtype = linear_layer.weight.dtype
         fp_weight = linear_layer.weight.data
         qbb_tool = QBB_v1(k=k)
         bases, alphas, _ = qbb_tool.decompose(fp_weight.detach())
         bases, alphas = qbb_tool.upd(fp_weight, bases, alphas, steps=3)
         return cls(
             bases=torch.stack(bases).to(device),
-            alphas=torch.stack(alphas).to(device),
+            alphas=torch.stack(alphas).to(device).to(dtype=curr_dtype),
             in_features=linear_layer.in_features,
             out_features=linear_layer.out_features
         )
