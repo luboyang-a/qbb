@@ -27,5 +27,7 @@ class QBBLinear(nn.Module):
         )
     
     def forward(self, x):
-        W_q = torch.sum(self.alphas * self.bases.to(device=x.device, dtype=x.dtype), dim=0)
+        W_q = torch.zeros(self.bases[0].shape, device=x.device, dtype=x.dtype)
+        for i in range(len(self.alphas)):
+            W_q = W_q + self.alphas[i].to(x.dtype) * self.bases[i].to(device=x.device, dtype=x.dtype)
         return torch.matmul(x, W_q.t())
