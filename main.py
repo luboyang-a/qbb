@@ -73,14 +73,14 @@ def main():
     params = {
         "epochs": 20,
         "lr": 1e-6,
-        "batch_size": 4
+        "batch_size": 1
     }
     optimized_student = fit(
         student,
         teacher,
         tokenizer,
         s1=1.0,
-        s2=1.0,
+        s2=0.01,
         **params
     )
     device = "cuda"

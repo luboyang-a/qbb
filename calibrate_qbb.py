@@ -77,38 +77,44 @@ class QBBCalibrator:
         return [c[1].cpu() for c in candidates[:num_samples]]
             
     def calibrate(self, epochs=3, lr=1e-4, batch_size=1):
-        original_layers = [layer for layer in self.student.model.layers]
-        calib_data = self.generate_synthetic_data()
+        calib_data = self.generate_synthetic_data(num_samples=256)
         trainable_params = [p for n, p in self.student.named_parameters() if "alphas" in n]
+        original_layers = [layer for layer in self.teacher.model.layers]
         optimizer = torch.optim.Adam(trainable_params, lr=lr, eps=1e-6)
         self._setup_hooks()
         for epoch in range(epochs):
             self.student.train()
             total_loss = 0
-            replace_prob = 0.5 * max(0, 1 - epoch / (epochs * 0.8))
-            if epoch > 0 and epoch % 5 == 0:
-                calib_data = self.generate_synthetic_data()
-            pbar = tqdm(enumerate(calib_data), total=len(calib_data), desc=f"Epoch {epoch + 1}")
+            replace_prob = 0.5 * max(0, 1 - epoch / (epochs * 0.5))
+            pbar = tqdm(enumerate(calib_data), total=len(calib_data), desc=f"Epoch {epoch+1}")
             for i, batch in pbar:
-                for idx in range(len(self.student.model.layers)):
-                    if torch.rand(1).item() < replace_prob:
-                        self.student.model.layers[idx] = self.teacher.model.layers[idx]
-                    else:
-                        self.student.model.layers[idx] = original_layers[idx]
-                batch = batch.to(self.device)
-                optimizer.zero_grad()
-                with torch.no_grad():
-                    t_output = self.teacher(batch)
                 s_output = self.student(batch)
-                l_mse = F.mse_loss(s_output.logits, t_output.logits)
-                l_feat = sum([F.mse_loss(sh.features, th.features) for sh, th in zip(self.s_hooks, self.t_hooks)])
+                h_teacher = self.teacher.model.embed_tokens(batch)
+                l_feat = 0
+                for idx in range(len(self.teacher.model.layers)):
+                    s_feat = self.s_hooks[idx].features
+                    if torch.rand(1).item() < replace_prob:
+                        res = self.student.model.layers[idx](h_teacher)
+                        h_teacher = res[0] if isinstance(res, tuple) else res
+                        self.t_hooks[idx].features = h_teacher
+                        self.s_hooks[idx].features = s_feat
+                    else:
+                        with torch.no_grad():
+                            res = self.teacher.model.layers[idx](h_teacher)
+                            h_teacher = res[0] if isinstance(res, tuple) else res
+                    t_feat = self.t_hooks[idx].features
+                    if s_feat is not None and t_feat is not None:
+                        l_feat += F.mse_loss(s_feat, t_feat)
+                with torch.no_grad():
+                    t_output = self.teacher.lm_head(self.teacher.model.norm(h_teacher))
+                l_mse = F.mse_loss(s_output.logits, t_output.detach())
                 loss = self.s1 * l_mse + self.s2 * l_feat
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=0.1)
                 optimizer.step()
                 total_loss += loss.item()
                 pbar.set_postfix({"loss": f"{loss.item():.4f}", "prob": f"{replace_prob:.2f}"})
-        for idx in range(len(self.student.model.layers)):
-            self.student.model.layers[idx] = original_layers[idx]
+                for h in self.s_hooks + self.t_hooks:
+                    h.features = None
         self._cleanup_hooks()
         print("Calibration Completed!\n")
