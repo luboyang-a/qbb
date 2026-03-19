@@ -75,7 +75,8 @@ class QBBCalibrator:
                 candidates.append((score, out))
         candidates.sort(key=lambda x: x[0], reverse=True)
         return [c[1].cpu() for c in candidates[:num_samples]]
-            
+
+    """        
     def calibrate(self, epochs=3, lr=1e-4, batch_size=1):
         calib_data = self.generate_synthetic_data(num_samples=256)
         trainable_params = [p for n, p in self.student.named_parameters() if "alphas" in n]
@@ -94,10 +95,11 @@ class QBBCalibrator:
                 for idx in range(len(self.teacher.model.layers)):
                     s_feat = self.s_hooks[idx].features
                     if torch.rand(1).item() < replace_prob:
-                        res = self.student.model.layers[idx](h_teacher)
-                        h_teacher = res[0] if isinstance(res, tuple) else res
-                        self.t_hooks[idx].features = h_teacher
-                        self.s_hooks[idx].features = s_feat
+                        with torch.no_grad():
+                            res = self.student.model.layers[idx](h_teacher)
+                            h_teacher = res[0] if isinstance(res, tuple) else res
+                            self.t_hooks[idx].features = h_teacher
+                            self.s_hooks[idx].features = s_feat
                     else:
                         with torch.no_grad():
                             res = self.teacher.model.layers[idx](h_teacher)
@@ -107,6 +109,47 @@ class QBBCalibrator:
                         l_feat += F.mse_loss(s_feat, t_feat)
                 with torch.no_grad():
                     t_output = self.teacher.lm_head(self.teacher.model.norm(h_teacher))
+                l_mse = F.mse_loss(s_output.logits, t_output.detach())
+                loss = self.s1 * l_mse + self.s2 * l_feat
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=0.1)
+                optimizer.step()
+                total_loss += loss.item()
+                pbar.set_postfix({"loss": f"{loss.item():.4f}", "prob": f"{replace_prob:.2f}"})
+                for h in self.s_hooks + self.t_hooks:
+                    h.features = None
+        self._cleanup_hooks()
+        print("Calibration Completed!\n")
+    """
+    def calibrate(self, epochs=3, lr=1e-4, batch_size=1):
+        calib_data = self.generate_synthetic_data(num_samples=256)
+        trainable_params = [p for n, p in self.student.named_parameters() if "alphas" in n]
+        optimizer = torch.optim.Adam(trainable_params, lr=lr, eps=1e-6)
+        self._setup_hooks()
+        for epoch in range(epochs):
+            self.student.train()
+            total_loss = 0
+            replace_prob = 0.5 * max(0, 1 - epoch / (epochs * 0.5))
+            pbar = tqdm(enumerate(calib_data), total=len(calib_data), desc=f"Epoch {epoch+1}")
+            for i, batch in pbar:
+                with torch.no_grad():
+                    h_teacher = self.teacher.model.embed_tokens(batch)
+                    for idx in range(len(self.teacher.model.layers)):
+                        if torch.rand(1).item() < replace_prob:
+                            res = self.student.model.layers[idx](h_teacher)
+                            h_teacher = res[0] if isinstance(res, tuple) else res
+                            self.t_hooks[idx].features = h_teacher
+                        else:
+                            res = self.teacher.model.layers[idx](h_teacher)
+                            h_teacher = res[0] if isinstance(res, tuple) else res
+                    t_output = self.teacher.lm_head(self.teacher.model.norm(h_teacher))
+                s_output = self.student(batch)
+                l_feat = 0
+                for idx in range(len(self.student.model.layers)):
+                    s_feat = self.s_hooks[idx].features
+                    t_feat = self.t_hooks[idx].features
+                    if s_feat is not None and t_feat is not None:
+                        l_feat += F.mse_loss(s_feat, t_feat)
                 l_mse = F.mse_loss(s_output.logits, t_output.detach())
                 loss = self.s1 * l_mse + self.s2 * l_feat
                 loss.backward()
