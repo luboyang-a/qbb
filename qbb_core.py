@@ -6,7 +6,25 @@ class QBB_v1:
         self.K = k
         self.lr = learning_rate
         self.iter = iteration
+        self.q_min = -8
+        self.q_max = 7
 
+    def _search_best_alpha(self, R):
+        mean_val = R.abs().mean(dim=1, keepdim=True)
+        base_alpha = mean_val / 3.0
+        best_mse = torch.full((R.shape[0], 1), float('inf'), device=R.device)
+        best_alpha = base_alpha.clone()
+        for ratio in torch.linspace(0.5, 1.0, 20, device=R.device):
+            test_alpha = base_alpha * ratio
+            test_alpha = torch.clamp(test_alpha, min=1e-8)
+            q = torch.clamp(torch.round(R / test_alpha), self.q_min, self.q_max)
+            w_recon = q * test_alpha
+            mse = torch.mean((w_recon - R)**2, dim=1, keepdim=True)
+            mask = mse < best_mse
+            best_mse[mask] = mse[mask]
+            best_alpha[mask] = test_alpha[mask]
+        return best_alpha
+    """
     def decompose(self, W):
         R = W.clone().to(torch.float32)
         bases = []
@@ -24,6 +42,26 @@ class QBB_v1:
             alphas.append(alpha)
             bases.append(B)
             print(f"Iter {i + 1}: error = {error:.8f}")
+        return bases, alphas, errors
+    """
+
+    def decompose(self, W):
+        Wf = W.to(torch.float32)
+        R = Wf.clone()
+        bases = []
+        alphas = []
+        errors = []
+        self.q_min, self.q_max = -8, 7
+        for i in range(self.K):
+            alpha = self._search_best_alpha(R)
+            B_float = torch.clamp(torch.round(R / (alpha + 1e-9)), self.q_min, self.q_max)
+            B_int8 = B_float.to(torch.int8)
+            R = R - B_int8.to(torch.float32) * alpha
+            error = torch.mean(R**2).item()
+            errors.append(error)
+            alphas.append(alpha.to(W.dtype))
+            bases.append(B_int8)
+            print(f"  Layer {i+1}: MSE = {error:.8f}")
         return bases, alphas, errors
     
     def upd(self, W, bases, alphas, steps=3):
@@ -46,8 +84,7 @@ class QBB_v1:
                 for k in range(self.K):
                     W_others = torch.sum(alphas_param * bases_tensor, dim=0) - (alphas_param[k] * bases_tensor[k])
                     R = Wf - W_others
-                    nB= torch.sign(R)
-                    nB[nB == 0] = 1
+                    nB = torch.clamp(torch.round(R / (alphas_param[k] + 1e-9)), self.q_min, self.q_max)
                     bases_tensor[k] = nB
             print(f"Outer Step {j + 1} | MSE loss: {loss.item():.8f}")
         return [b.to(torch.int8) for b in torch.unbind(bases_tensor, dim=0)], torch.unbind(alphas_param.detach(), dim=0)

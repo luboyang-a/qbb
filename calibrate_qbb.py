@@ -3,6 +3,8 @@ import torch.nn as nn
 from qbb_model import QBBLinear
 import torch.nn.functional as F
 from tqdm import tqdm
+# import bitsandbytes as bnb
+
 
 def qbb_replace(model, k=4, verbose=True):
     for name, child in model.named_children():
@@ -14,6 +16,27 @@ def qbb_replace(model, k=4, verbose=True):
         else:
             qbb_replace(child, k=k, verbose=verbose)
     return model
+"""
+def qbb_replace(model, k=4, verbose=True):
+    for name, child in model.named_children():
+        target_classes = (nn.Linear, bnb.nn.Linear4bit)
+        if isinstance(child, target_classes) and name != "lm_head":
+            if isinstance(child, bnb.nn.Linear4bit):
+                weight = bnb.functional.dequantize_4bit(
+                    child.weight.data, 
+                    child.weight.quant_state
+                ).to(torch.float16)
+            else:
+                weight = child.weight.data.to(torch.float16)
+            new_layer = QBBLinear.from_linear(child, weight=weight, k=k)
+            if verbose:
+                origin_type = "NF4-4bit" if isinstance(child, bnb.nn.Linear4bit) else "FP16-Linear"
+                print(f"Replaced: {name} ({origin_type} -> QBBLinear-k{k})")
+            setattr(model, name, new_layer)          
+        else:
+            qbb_replace(child, k=k, verbose=verbose)        
+    return model
+"""
 
 class FeatureHook:
 
