@@ -18,7 +18,7 @@ class QBBLinear(nn.Module):
         fp_weight = linear_layer.weight.data
         qbb_tool = QBB_v1(k=k)
         bases, alphas, _ = qbb_tool.decompose(fp_weight.detach())
-        bases, alphas = qbb_tool.upd(fp_weight, bases, alphas, steps=3)
+        bases, alphas = qbb_tool.upd(fp_weight, bases, alphas, steps=5)
         return cls(
             bases=torch.stack(bases).to(device),
             alphas=torch.stack(alphas).to(device).to(dtype=curr_dtype),

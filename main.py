@@ -1,7 +1,7 @@
 import torch
 from transformers import AutoModelForCausalLM, AutoConfig, AutoTokenizer
 import copy
-from calibrate_qbb import qbb_replace, QBBCalibrator
+from calibrate_qbb import qbb_replace, QBBCalibrator, get_wikitext_data
 import os
 
 def prepare_model(model_id, save_path):
@@ -27,7 +27,7 @@ def load_model(model_path):
     ).to(device)
     teacher.eval()
     student = copy.deepcopy(teacher)
-    student = qbb_replace(student, k=4, verbose=True)
+    student = qbb_replace(student, k=3, verbose=True)
     return teacher, student
 
 """
@@ -69,7 +69,7 @@ WIKITEXT_SAMPLES = [
     " It features a combat system where players can use various weapons and magical abilities. ",
     " The story follows a group of survivors in a post-apocalyptic world searching for a new home. "
 ]
-
+"""
 def calculate_ppl(model, tokenizer, text_samples, device):
     model.eval()
     total_loss = 0
@@ -77,12 +77,32 @@ def calculate_ppl(model, tokenizer, text_samples, device):
     for text in text_samples:
         inputs = tokenizer(text, return_tensors="pt").to(device)
         input_ids = inputs.input_ids
-        # 注意：labels 必须和 input_ids 一致才能算 CrossEntropy
         with torch.no_grad():
             outputs = model(input_ids, labels=input_ids)
             loss = outputs.loss
             total_loss += loss.item() * input_ids.size(1)
             total_length += input_ids.size(1)
+    return torch.exp(torch.tensor(total_loss / total_length)).item()
+"""
+
+def calculate_ppl(model, tokenizer, data_samples, device):
+    model.eval()
+    total_loss = 0
+    total_length = 0
+    
+    for sample in data_samples:
+        if isinstance(sample, str):
+            inputs = tokenizer(sample, return_tensors="pt").to(device)
+            input_ids = inputs.input_ids
+        else:
+            input_ids = sample.to(device)
+        with torch.no_grad():
+            outputs = model(input_ids, labels=input_ids)
+            loss = outputs.loss
+            curr_len = input_ids.size(1)
+            total_loss += loss.item() * curr_len
+            total_length += curr_len
+    if total_length == 0: return float('inf')
     return torch.exp(torch.tensor(total_loss / total_length)).item()
 
 def main():
@@ -94,21 +114,23 @@ def main():
         tokenizer.pad_token = tokenizer.eos_token
     teacher, student = load_model(model_path)
     params = {
-        "epochs": 20,
-        "lr": 1e-6,
+        "epochs": 1,
+        "lr": 1e-7,
         "batch_size": 1
     }
     optimized_student = fit(
         student,
         teacher,
         tokenizer,
-        s1=1.0,
+        s1=0.001,
         s2=0.01,
         **params
     )
+    # optimized_student = student
     device = "cuda"
-    ppl_t = calculate_ppl(teacher, tokenizer, WIKITEXT_SAMPLES, device)
-    ppl_s = calculate_ppl(optimized_student, tokenizer, WIKITEXT_SAMPLES, device)
+    test_samples = get_wikitext_data(tokenizer, n_samples=128, seq_len=64, split="test")
+    ppl_t = calculate_ppl(teacher, tokenizer, test_samples, device)
+    ppl_s = calculate_ppl(optimized_student, tokenizer, test_samples, device)
     print(f"FP16 teacher PPL: {ppl_t:.4f}")
     print(f"QBB student PPL: {ppl_s:.4f}")
     print(f"Loss: {((ppl_s - ppl_t) / ppl_t * 100):.2f}%")

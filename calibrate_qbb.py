@@ -3,6 +3,7 @@ import torch.nn as nn
 from qbb_model import QBBLinear
 import torch.nn.functional as F
 from tqdm import tqdm
+from datasets import load_dataset
 # import bitsandbytes as bnb
 
 
@@ -37,6 +38,24 @@ def qbb_replace(model, k=4, verbose=True):
             qbb_replace(child, k=k, verbose=verbose)        
     return model
 """
+
+def get_wikitext_data(tokenizer, n_samples=128, seq_len=64, split="train"):
+    from datasets import load_dataset
+    dataset = load_dataset('wikitext', 'wikitext-2-raw-v1', split=split)
+    samples = []
+    bos_id = tokenizer.bos_token_id if tokenizer.bos_token_id is not None else 1
+    valid_texts = [t for t in dataset['text'] if len(t.strip()) > 100]
+    import random
+    random.seed(42)
+    random.shuffle(valid_texts)
+    for text in valid_texts:
+        if len(samples) >= n_samples: break
+        ids = tokenizer.encode(text, add_special_tokens=False)
+        if len(ids) < seq_len: continue
+        input_ids = torch.tensor([[bos_id] + ids[:seq_len-1]]) 
+        samples.append(input_ids)
+        
+    return samples
 
 class FeatureHook:
 
@@ -97,6 +116,7 @@ class QBBCalibrator:
                 )
                 candidates.append(out.cpu())
         return candidates
+    
     """        
     def calibrate(self, epochs=3, lr=1e-4, batch_size=1):
         calib_data = self.generate_synthetic_data(num_samples=256)
@@ -196,6 +216,7 @@ class QBBCalibrator:
         self._cleanup_hooks()
         print("Calibration Completed!\n")
     """
+    """
     def calibrate(self, epochs=3, lr=1e-4, batch_size=1):
         torch.manual_seed(42) 
         if torch.cuda.is_available():
@@ -239,6 +260,44 @@ class QBBCalibrator:
                 optimizer.step()
                 total_loss += loss.item()
                 pbar.set_postfix({"loss": f"{loss.item():.4f}", "prob": f"{replace_prob:.2f}"})
+                for h in self.s_hooks + self.t_hooks:
+                    h.features = None
+        self._cleanup_hooks()
+        print("Calibration Completed!\n")
+    """
+    def calibrate(self, epochs=3, lr=1e-4, batch_size=1):
+        torch.manual_seed(42) 
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(42)
+        calib_data = get_wikitext_data(tokenizer=self.tokenizer, n_samples=256, seq_len=64, split="train")
+        trainable_params = [p for n, p in self.student.named_parameters() if "alphas" in n]
+        optimizer = torch.optim.Adam(trainable_params, lr=lr, eps=1e-6)
+        self._setup_hooks()
+        for epoch in range(epochs):
+            self.student.train()
+            total_loss = 0
+            pbar = tqdm(enumerate(calib_data), total=len(calib_data), desc=f"Epoch {epoch+1}")
+            for i, batch in pbar:
+                batch = batch.to(self.device)
+                bsz, seq_len = batch.shape
+                attention_mask = torch.ones((bsz, seq_len), device=self.device)
+                with torch.no_grad():
+                    t_output = self.teacher(batch, attention_mask=attention_mask)
+                s_output = self.student(batch, attention_mask=attention_mask)
+                l_feat = 0
+                for idx in range(len(self.student.model.layers)):
+                    t_feat = self.t_hooks[idx].features
+                    s_feat = self.s_hooks[idx].features
+                    if t_feat is not None and s_feat is not None:
+                        l_feat += F.mse_loss(s_feat, t_feat)
+                l_mse = F.mse_loss(s_output.logits, t_output.logits)
+                optimizer.zero_grad()
+                loss = l_mse * self.s1 + l_feat * self.s2
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=0.1)
+                optimizer.step()
+                total_loss += loss.item()
+                pbar.set_postfix({"loss": f"{loss.item():.4f}"})
                 for h in self.s_hooks + self.t_hooks:
                     h.features = None
         self._cleanup_hooks()
