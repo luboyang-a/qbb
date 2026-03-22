@@ -27,7 +27,7 @@ def load_model(model_path):
     ).to(device)
     teacher.eval()
     student = copy.deepcopy(teacher)
-    student = qbb_replace(student, k=3, verbose=True)
+    student = qbb_replace(student, k=4, verbose=True)
     return teacher, student
 
 """
@@ -114,7 +114,7 @@ def main():
         tokenizer.pad_token = tokenizer.eos_token
     teacher, student = load_model(model_path)
     params = {
-        "epochs": 1,
+        "epochs": 3,
         "lr": 1e-7,
         "batch_size": 1
     }
