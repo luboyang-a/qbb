@@ -26,6 +26,34 @@ class QBBLinear(nn.Module):
             out_features=linear_layer.out_features
         )
     
+    @classmethod
+    def from_linear_random(cls, linear_layer, k=4):
+        device = linear_layer.weight.device
+        curr_dtype = linear_layer.weight.dtype
+        out_f, in_f = linear_layer.weight.shape
+        bases = torch.randint(-8, 8, (k, out_f, in_f), device=device, dtype=torch.int8)
+        alphas = torch.rand(k, out_f, 1, device=device, dtype=curr_dtype) * 0.01
+        return cls(
+            bases=bases,
+            alphas=alphas,
+            in_features=in_f,
+            out_features=out_f
+        )
+    
+    @classmethod
+    def from_linear_no_upd(cls, linear_layer, k=4):
+        device = linear_layer.weight.device
+        curr_dtype = linear_layer.weight.dtype
+        fp_weight = linear_layer.weight.data
+        qbb_tool = QBB_v1(k=k)
+        bases, alphas, _ = qbb_tool.decompose(fp_weight.detach())
+        return cls(
+            bases=torch.stack(bases).to(device),
+            alphas=torch.stack(alphas).to(device).to(dtype=curr_dtype),
+            in_features=linear_layer.in_features,
+            out_features=linear_layer.out_features
+        )
+
     def forward(self, x):
         W_q = torch.zeros(self.bases[0].shape, device=x.device, dtype=x.dtype)
         for i in range(len(self.alphas)):

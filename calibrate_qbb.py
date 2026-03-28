@@ -17,6 +17,29 @@ def qbb_replace(model, k=4, verbose=True):
         else:
             qbb_replace(child, k=k, verbose=verbose)
     return model
+
+def qbb_replace_random(model, k=4, verbose=True):
+    for name, child in model.named_children():
+        if isinstance(child, nn.Linear) and name != "lm_head":
+            if verbose:
+                print(f" replace: {name} | in: {child.in_features} -> out: {child.out_features}")
+            new_layer = QBBLinear.from_linear_random(child, k=k)
+            setattr(model, name, new_layer)
+        else:
+            qbb_replace_random(child, k=k, verbose=verbose)
+    return model
+
+def qbb_replace_no_upd(model, k=4, verbose=True):
+    for name, child in model.named_children():
+        if isinstance(child, nn.Linear) and name != "lm_head":
+            if verbose:
+                print(f" replace: {name} | in: {child.in_features} -> out: {child.out_features}")
+            new_layer = QBBLinear.from_linear_no_upd(child, k=k)
+            setattr(model, name, new_layer)
+        else:
+            qbb_replace_no_upd(child, k=k, verbose=verbose)
+    return model
+
 """
 def qbb_replace(model, k=4, verbose=True):
     for name, child in model.named_children():
