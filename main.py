@@ -1,7 +1,7 @@
 import torch
 from transformers import AutoModelForCausalLM, AutoConfig, AutoTokenizer
 import copy
-from calibrate_qbb import qbb_replace, QBBCalibrator, get_wikitext_data
+from calibrate_qbb import qbb_replace, QBBCalibrator, get_wikitext_data, qbb_replace_random, qbb_replace_no_upd
 import os
 
 def prepare_model(model_id, save_path):
@@ -29,6 +29,29 @@ def load_model(model_path):
     student = copy.deepcopy(teacher)
     student = qbb_replace(student, k=4, verbose=True)
     return teacher, student
+
+def load_model_random(model_path):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    teacher = AutoModelForCausalLM.from_pretrained(
+        model_path,
+        torch_dtype=torch.float16
+    ).to(device)
+    teacher.eval()
+    student = copy.deepcopy(teacher)
+    student = qbb_replace_random(student, k=4, verbose=True)
+    return teacher, student
+
+def load_model_no_upd(model_path):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    teacher = AutoModelForCausalLM.from_pretrained(
+        model_path,
+        torch_dtype=torch.float16
+    ).to(device)
+    teacher.eval()
+    student = copy.deepcopy(teacher)
+    student = qbb_replace_no_upd(student, k=4, verbose=True)
+    return teacher, student
+    
 
 """
 def load_model(model_path):
@@ -113,6 +136,8 @@ def main():
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     teacher, student = load_model(model_path)
+    # teacher, student = load_model_random(model_path)
+    # teacher, student = load_model_no_upd(model_path)
     params = {
         "epochs": 3,
         "lr": 1e-7,
